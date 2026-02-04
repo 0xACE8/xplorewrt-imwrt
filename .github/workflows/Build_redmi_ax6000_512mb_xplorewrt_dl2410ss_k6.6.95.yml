@@ -1,0 +1,395 @@
+#
+# Copyright (c) 2019-2026 0xACE8
+#
+# 本ソフトウェアはフリーソフトウェアであり、MITライセンスの下で公開されています。
+# 詳細については /LICENSE を参照してください。
+#
+# https://github.com/0xACE8
+#
+# 説明: GitHub Actionsのモジュール化を活用し、プライバシーとセキュリティを確保したOpenWrtビルド。
+#
+
+name: Build redmi_ax6000_512mb xplorewrt dl24.10 snapshot kernel 6.6.95 actions.
+
+on:
+  workflow_dispatch:
+    inputs:
+      restore_config:
+        description: 'Restore Configuration. 🇯🇵 設定を復元'
+        type: boolean
+        default: false
+      boost_wifi_5g:
+        description: 'Boost Wi-Fi 5G Signal. 🇯🇵 5G信号の増幅'
+        type: boolean
+        default: false
+      upload_firmware:
+        description: 'Upload FW to Artifact. 🇯🇵 Artifactに保存'
+        type: boolean
+        default: false
+      upload_release:
+        description: 'Upload FW to Release.. 🇯🇵 Releaseに公開'
+        type: boolean
+        default: false
+      upload_wenshushu:
+        description: 'Upload FW to WENSHUSHU 🇯🇵 文叔叔に転送'
+        type: boolean
+        default: false  
+      telegram_notify:
+        description: 'Telegram Notification. 🇯🇵 Telegram通知'
+        type: boolean
+        default: true
+      keepalive_cache:
+        description: 'Manual Cache Keepalive 🇯🇵 保活モード'
+        type: boolean
+        default: false
+      clean_cache:
+        description: 'Clean all old CACHE... 🇯🇵 CACHEを削除'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 2 * * 0'     # 每周日 02:00 运行 (保持缓存活跃，防止被 GitHub 删除)
+    - cron: '0 0 1 * *'     # 每月 1 号 00:00 运行 (由于 Key 包含月份，会自动生成全新缓存)
+    
+env:
+  # annawrt 2410
+  REPO_DLOOK2410_K66_LINK:                    ${{ secrets.REPO_DLOOK2410_K66_LINK }}
+  REPO_DLOOK2410_K66_TREE:                    ${{ secrets.REPO_DLOOK2410_K66_TREE }}
+  REPO_DLOOK2410_K66_HEAD:                    ${{ secrets.REPO_DLOOK2410_K66_HEAD }}
+  REPO_DLOOK2410_K66_DIFF:                    ${{ secrets.REPO_DLOOK2410_K66_DIFF }}
+  # cmcc-xr30-emmc
+  REDMI_AX6000_512MB_DLOOK2410_K66_PATCHES:   ${{ secrets.REDMI_AX6000_512MB_DLOOK2410_K66_PATCHES }}
+  REDMI_AX6000_512MB_DLOOK2410_K66_PROFILE:   ${{ secrets.REDMI_AX6000_512MB_DLOOK2410_K66_PROFILE }}
+  REDMI_AX6000_512MB_DLOOK2410_K66_ARCHIVE:   ${{ secrets.REDMI_AX6000_512MB_DLOOK2410_K66_ARCHIVE }}
+  # token
+  GITHUB_TOKEN:                               ${{ secrets.ACCESS_TOKEN }}
+  ACCESS_TOKEN:                               ${{ secrets.ACCESS_TOKEN }}
+  # feeds source & check sha512sum
+  ADD_EXTRA_SOURCE:                           ${{ secrets.ADD_EXTRA_SOURCE }}
+  ACCESS_SHA512SUM:                           ${{ secrets.ACCESS_SHA512SUM }}
+  ACCESS_REPACKAGE:                           ${{ secrets.ACCESS_REPACKAGE }}
+  # luci & packages repo
+  REPO_PLUGIN_SLUG:                           ${{ secrets.REPO_PLUGIN_SLUG }}
+  REPO_PLUGIN_HEAD:                           ${{ secrets.REPO_PLUGIN_HEAD }}
+  REPO_PLUGIN_FLOW:                           ${{ secrets.REPO_PLUGIN_FLOW }}
+  # cmcc color sytle for argon
+  ARGON_THEME_XIAOMI:                         ${{ secrets.ARGON_THEME_XIAOMI }}
+  # telegram bot
+  TELEGRAM_BOT_KEY:                           ${{ secrets.TELEGRAM_BOT_KEY }}
+  TELEGRAM_CHAT_ID:                           ${{ secrets.TELEGRAM_CHAT_ID }}
+  # input status
+  INPUT_RESTORE:                              ${{ github.event.inputs.restore_config }}
+  INPUT_BOOST5G:                              ${{ github.event.inputs.boost_wifi_5g }}
+  INPUT_ARTIFACT:                             ${{ github.event.inputs.upload_firmware }}
+  INPUT_RELEASE:                              ${{ github.event.inputs.upload_release }}
+  INPUT_WENSHUSHU:                            ${{ github.event.inputs.upload_wenshushu }}
+  INPUT_NOTIFY:                               ${{ github.event.inputs.telegram_notify }}
+  INPUT_KEEPALIVE:                            ${{ github.event_name == 'schedule' || github.event.inputs.keepalive_cache == 'true' }}
+  INPUT_CLEANCACHE:                           ${{ github.event.inputs.clean_cache }}
+  # hardware & repo info
+  DEVICE_NAME:                                REDMI_AX6000
+  TARGET_CHIP:                                mt7986a
+  TARGET_DISK:                                SPI_NAND_512MB
+  SOURCE_CODE:                                dailook
+  KERNEL_VERS:                                kernel_6.6.95
+  OUTPUT_FILE:                                xplorewrt-dl24.10-k6.6-mt7986a-redmi_ax6000-512mb-sysupgrade
+  TZ: "Asia/Tokyo"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    permissions: write-all
+
+    steps:
+    - name: Start Timer (計測開始)
+      run: |
+        echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+
+    - name: Sync and Wait for Plugin Repo (プラグインリポジトリの同期と待機)
+      run: |
+        LAST_TS=$(date -d $(gh run list -w "$REPO_PLUGIN_FLOW" -R "$REPO_PLUGIN_SLUG" -s success --limit 1 --json updatedAt -q '.[0].updatedAt // "1970-01-01"') +%s)
+        DIFF=$(( ($(date +%s) - LAST_TS) / 3600 ))
+        if [ "$DIFF" -ge 24 ]; then
+          echo "⚠️ 最終同期から ${DIFF}時間経過。同期を開始します..."
+          gh workflow run "$REPO_PLUGIN_FLOW" -R "$REPO_PLUGIN_SLUG" -r "$REPO_PLUGIN_HEAD"
+          for i in {1..30}; do
+            sleep 20
+            RUN_ID=$(gh run list -w "$REPO_PLUGIN_FLOW" -R "$REPO_PLUGIN_SLUG" --limit 1 --json databaseId,status -q 'map(select(.status != "completed")) | .[0].databaseId')
+            [[ -n "$RUN_ID" && "$RUN_ID" != "null" ]] && break
+          done
+          [[ -z "$RUN_ID" ]] && echo "❌ タイムアウトを検出しました" && exit 1
+          gh run watch "$RUN_ID" -R "$REPO_PLUGIN_SLUG" --exit-status
+        else
+          echo "✅ 最近同期されました（${DIFF}時間前）。スキップします。"
+        fi
+
+    - name: Checkout (チェックアウト)
+      uses: actions/checkout@main
+      with:
+        fetch-depth: 0
+
+    - name: Check Server Performance (サーバー性能の確認)
+      run: |
+        echo "⚠️注意⚠️"
+        echo "サーバーのリソースは有限です。プラグインの過剰な選択はCPU高負荷の原因となります。"
+        echo -e "既知のCPUモデル（降順）: 7763，8370C，8272CL，8171M，E5-2673\n"
+        echo "-------------------------CPU 情報---------------------------"
+        echo "CPUの物理数  : $(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+        echo "CPUコア数    : $(nproc)"
+        echo -e "CPUモデル情報:$(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\n"
+        echo "------------------------メモリ情報--------------------------"
+        echo "メモリの詳細:"
+        echo -e "$(sudo lshw -short -C memory | grep GiB)\n"
+        echo "---------------------ハードディスク情報---------------------"
+        echo "ディスク容量: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+    - name: Initialize Environment (環境の初期化)
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo -E apt -yqq update
+        sudo -E apt -yqq install zip rename dos2unix libfuse-dev python3-netifaces libcrypt-dev libncurses5-dev
+        sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+        sudo timedatectl set-timezone "$TZ"
+        sudo chown $USER:$GROUPS $GITHUB_WORKSPACE
+        git config --global url."https://$ACCESS_TOKEN@github.com/0xACE8/".insteadOf "https://github.com/0xACE8/"
+        git config --global core.compression 0
+
+    - name: Clone Source Code (ソースコードのクローン)
+      working-directory: ./
+      run: |
+        df -hT $PWD
+        git clone --depth 1 $REPO_DLOOK2410_K66_LINK -b $REPO_DLOOK2410_K66_HEAD openwrt
+        # Remove China Mirrors (中国国内ミラーの削除)
+        [ -f "openwrt/scripts/projectsmirrors.json" ] && sed -i '/.cn\//d; /tencent/d; /aliyun/d' openwrt/scripts/projectsmirrors.json && rm -rf files
+        # Prepare Cache Key (キャッシュキーの准备)
+        mkdir -p ${{ github.workspace }}/openwrt/.ccache
+        echo "CACHE_MONTH=$(date +%Y%m)" >> $GITHUB_ENV
+        [[ "$INPUT_CLEANCACHE" == "true" ]] && echo "CLEAN_MARK=_clean_$(date +%s)" >> $GITHUB_ENV || echo "CLEAN_MARK=" >> $GITHUB_ENV
+
+    - name: Cache Toolchain (ツールチェーンのキャッシュ)
+      uses: stupidloud/cachewrtbuild@main
+      with:
+        ccache: true
+        toolchain: true
+        skip: true
+        mixkey: ${{ env.TARGET_CHIP }}-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.REPO_DLOOK2410_K66_TREE }}-${{ secrets.REPO_DLOOK2410_K66_HEAD }}-${{ env.KERNEL_VERS }}-[${{ env.CLEAN_MARK }}]
+        prefix: ${{ github.workspace }}/openwrt
+
+    - name: Cache dl Directory (dlディレクトリのキャッシュ)
+      uses: actions/cache@v3
+      with:
+        path: openwrt/dl
+        key: mt798x-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.REPO_DLOOK2410_K66_TREE }}-${{ secrets.REPO_DLOOK2410_K66_HEAD }}-${{ env.KERNEL_VERS }}-${{ hashFiles('**/feeds.conf.default') }}
+        restore-keys: |
+          mt798x-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.REPO_DLOOK2410_K66_TREE }}-${{ secrets.REPO_DLOOK2410_K66_HEAD }}-${{ env.KERNEL_VERS }}-
+
+    - name: Update & Install Feeds (フィードの更新とインストール)
+      working-directory: ./openwrt
+      run: |
+        # Surgical Clean Go Cache (Goキャッシュの物理削除)
+        [ -d "dl/go-mod-cache" ] && rm -rf dl/go-mod-cache && mkdir -p openwrt/dl/go-mod-cache
+        ${{ secrets.REDMI_AX6000_512MB_DLOOK2410_K66_PATCHES }}
+        ${{ secrets.ADD_EXTRA_SOURCE }}
+        ./scripts/feeds update -a
+        rm -rf feeds/packages/lang/rust && git clone https://github.com/0xACE8/packages_lang_rust -b 1.90.0 feeds/packages/lang/rust
+        rm -rf feeds/packages/lang/golang && git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
+        ./scripts/feeds install -a
+
+    - name: Boost Wi-Fi 5G Signal (Wi-Fi 5G信号の増幅)
+      if: env.INPUT_BOOST5G == 'true'
+      working-directory: ./openwrt
+      run: |
+        ${{ secrets.BOOST_5G_TO_25DBM }}
+
+    - name: Load Custom Configuration (カスタム設定の読み込み)
+      working-directory: ./openwrt
+      id: loadconfig
+      run: |
+        set +x
+        cat <<'EOF' > .config
+        ${{ secrets.REDMI_AX6000_512MB_DLOOK2410_K66_PROFILE }}
+        EOF
+        ${{ secrets.REPO_DLOOK2410_K66_DIFF }}
+        ${{ secrets.ARGON_THEME_XIAOMI }}
+        sed -i 's/download-ci-llvm=true/download-ci-llvm=false/g' feeds/packages/lang/rust/Makefile
+        cat feeds/packages/lang/rust/Makefile
+        # Check CCache Status
+        ccache -s
+
+    - name: Restore Config Archive (設定アーカイブの復元)
+      if: steps.loadconfig.outcome == 'success' && env.INPUT_RESTORE == 'true'
+      working-directory: ./openwrt
+      run: |
+        ${{ secrets.REDMI_AX6000_512MB_DLOOK2410_K66_ARCHIVE }}
+
+    - name: Download Packages (パッケージのダウンロード)
+      if: steps.loadconfig.outcome == 'success' && !cancelled()
+      working-directory: ./openwrt
+      id: package
+      run: |
+        make defconfig
+        make download -j$(nproc)
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Keepalive Cache Refresh (キャッシュ更新のマーク付け)
+      if: env.INPUT_KEEPALIVE == 'true'
+      run: |
+        mkdir -p openwrt/.ccache
+        date > openwrt/.ccache/keepalive_timestamp
+        echo "✅ Cache flagged for refresh. Heavy build skipped."
+
+    - name: Compile Firmware (ファームウェアのコンパイル)
+      if: env.INPUT_KEEPALIVE != 'true'
+      working-directory: ./openwrt
+      id: compile
+      run: |
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 V=s
+        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Verify CCache Settings
+      if: steps.compile.outcome == 'success'
+      run: |
+        # Update Variables (変数の更新)
+        echo "OUTPUT_FILE=${OUTPUT_FILE}_${FILE_DATE}" >> $GITHUB_ENV
+        ccache -p
+        ccache -s
+
+    - name: Organize Files (ファイルの整理)
+      if: steps.compile.outcome == 'success'
+      id: organize
+      run: |
+        cd openwrt/bin/targets/*/*
+        FIRMWARE_FILE=$(ls *sysupgrade.* 2>/dev/null | head -n 1)
+        EXT="${FIRMWARE_FILE##*.}"
+        ls -A | grep -v "$FIRMWARE_FILE" | xargs rm -rdf
+        mv "$FIRMWARE_FILE" "${{ env.OUTPUT_FILE }}.$EXT"
+        sha512sums ${{ secrets.ACCESS_SHA512SUM }} sha512sums "${{ env.OUTPUT_FILE }}.$EXT"
+        ${{ secrets.ACCESS_REPACKAGE }} "${{ env.OUTPUT_FILE }}.$EXT"
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+
+    - name: Upload to Artifacts (Artifactに保存)
+      if: steps.organize.outcome == 'success' && env.INPUT_ARTIFACT == 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.OUTPUT_FILE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Upload to Release (Releaseに公開)
+      if: steps.compile.outcome == 'success' && env.INPUT_RELEASE == 'true'
+      uses: softprops/action-gh-release@master
+      with:
+        token: ${{ secrets.ACCESS_TOKEN }}
+        tag_name: ${{ env.FILE_DATE }}_${{ env.TARGET_CHIP }}_${{ env.DEVICE_NAME }}_${{ env.TARGET_DISK }}
+        name: ${{ env.TARGET_CHIP }}_${{ env.DEVICE_NAME }}_${{ env.TARGET_DISK }}_${{ env.KERNEL_VERS }}_${{ env.FILE_DATE }}
+        files: ${{ env.FIRMWARE }}/*
+        body: |
+          **本ファームウェアは、CPU「${{ env.TARGET_CHIP }}」搭載のモデル「${{ env.DEVICE_NAME }}」✅ ${{ env.TARGET_DISK }} ✅専用です。**
+          ### 📒「${{ env.SOURCE_CODE }}」のソースコードを基にビルドされました。
+          - 🖥️ 対応機種: 　${{ env.DEVICE_NAME }}
+          - 💿 容量仕様: 　${{ env.TARGET_DISK }}
+          - 🐧 カーネル: 　${{ env.KERNEL_VERS }}
+          - 👤 ソース名: 　${{ env.SOURCE_CODE }}
+          - 🌲 ソース元: 　${{ env.REPO_DLOOK2410_K66_TREE }}
+          - 🌿 ブランチ: 　${{ env.REPO_DLOOK2410_K66_HEAD }}
+          - 🔗 管理ＩＰ: 　192.168.***.1 または ${{ env.SOURCE_CODE }}.lan
+          - 🛡️ 初期パス: 　********
+          ### ⚠️ 免責事項 ⚠️
+          - ‼️ **本ファームウェアは、個人利用を目的とした非公式のカスタマイズ版です。**
+          - ⛔️ **強制フラッシュ等でデバイスが破損した場合、本リポジトリは一切の責任を負いません。自己責任で使用してください。**
+
+    - name: Upload to wenshushu (ウェンおじさんにアップロードする)
+      if: steps.compile.outcome == 'success' && steps.organize.outcome == 'success' && env.INPUT_WENSHUSHU == 'true'
+      working-directory: ./openwrt
+      run: |
+        curl -fsSL git.io/file-transfer | sh
+        ./transfer wss -s -p 16 -t 600 --no-progress ${FIRMWARE} 2>&1 | tee wenshushu.log
+        WENSHUSHU=$(cat wenshushu.log | grep 'Manage Link:' | cut -d' ' -f3-)
+        echo "WENSHUSHU=$WENSHUSHU" >> $GITHUB_ENV
+
+    - name: Calculate Duration
+      if: always() && env.INPUT_NOTIFY == 'true' && env.INPUT_KEEPALIVE != 'true'
+      run: |
+        END_TIME=$(date +%s)
+        START_TIME=${{ env.START_TIME }}
+        TOTAL_SECONDS=$((END_TIME - START_TIME))
+        H=$((TOTAL_SECONDS / 3600))
+        M=$(((TOTAL_SECONDS % 3600) / 60))
+        S=$((TOTAL_SECONDS % 60))
+        echo "DURATION=$(printf "%02d:%02d:%02d" $H $M $S)" >> $GITHUB_ENV
+
+    - name: Final Report & TG Notify (総合ステータス通知)
+      if: always() && env.INPUT_NOTIFY == 'true' && env.INPUT_KEEPALIVE != 'true'
+      run: |
+        get_stat() { [ "$1" == "true" ] && echo "✅" || echo "⏺️"; }
+        
+        [ "${{ steps.compile.outcome }}" == "success" ] && BUILD_STAT="✅ビルドが正常に完了しました！✅" || BUILD_STAT="❌ ビルドが失敗しました！ ❌"
+
+        if [[ -n "$WENSHUSHU" ]]; then
+            STAT_WEN="✅"
+            WEN_MSG="•☁️%20文氏転送:%0A　%20　%20　$WENSHUSHU"
+        elif [[ "$INPUT_WENSHUSHU" == "true" ]] || [[ "$GITHUB_EVENT_ACTION" == *"upload_wenshushu"* ]]; then
+            STAT_WEN="❌ (失敗)" 
+            WEN_MSG=""
+        else
+            STAT_WEN="⏺️"
+            WEN_MSG=""
+        fi
+      
+        STAT_LIST="•⚙️%20配置复元:　%20　%20　$(get_stat "${{ github.event.inputs.restore_config }}")%0A"
+        STAT_LIST="${STAT_LIST}•🛜%20信号增幅:　%20　%20　$(get_stat "${{ github.event.inputs.boost_wifi_5g }}")%0A"
+        STAT_LIST="${STAT_LIST}•💾%20构建成果:　%20　%20　$(get_stat "${{ github.event.inputs.upload_firmware }}")%0A"
+        STAT_LIST="${STAT_LIST}•🚀%20公开配信:　%20　%20　$(get_stat "${{ github.event.inputs.upload_release }}")%0A"
+        STAT_LIST="${STAT_LIST}•☁️%20文氏転送:　%20　%20　${STAT_WEN}%0A"
+        STAT_LIST="${STAT_LIST}•🧹%20缓存清理:　%20　%20　$(get_stat "${{ github.event.inputs.clean_cache }}")"
+
+        MSG="${BUILD_STAT}"
+        MSG="${MSG}%0A＝＝＝＝＝  基 本 情 報 ＝＝＝＝＝＝"
+        MSG="${MSG}%0A•🖥️%20対応機種:%0A　%20　%20　${DEVICE_NAME}"
+        MSG="${MSG}%0A•💿%20容量仕様:%0A　%20　%20　${TARGET_DISK}"
+        MSG="${MSG}%0A•🐧%20カーネル:%0A　%20　%20　${KERNEL_VERS}"
+        MSG="${MSG}%0A•👤%20ソース名:%0A　%20　%20　${SOURCE_CODE}"
+        MSG="${MSG}%0A•🌲%20ソース元:%0A　%20　%20　${REPO_DLOOK2410_K66_TREE}"
+        MSG="${MSG}%0A•🌿%20ブランチ:%0A　%20　%20　${REPO_DLOOK2410_K66_HEAD}%0A"
+
+        MSG="${MSG}%0A＝＝＝＝＝ 状 態 一 覧 ＝＝＝＝＝＝%0A${STAT_LIST}%0A%0A"
+        MSG="${MSG}＝＝＝＝＝ 結 果 情 報 ＝＝＝＝＝＝%0A"
+        MSG="${MSG}•⏱️%20実行時間:　%20　%20　${{ env.DURATION }}%0A"
+        
+        if [ "${{ steps.compile.outcome }}" == "success" ]; then
+          MSG="${MSG}•📦%20ファイル:%0A　%20　%20　${OUTPUT_FILE}%0A"
+
+          if [[ -n "$WEN_MSG" ]]; then
+              MSG="${MSG}%0A${WEN_MSG}"
+          fi
+
+        else
+          MSG="${MSG}•❌%20失敗時刻:　%20　$(date +'%Y-%m-%d %H:%M')%0A"
+        fi
+
+        MSG="${MSG}%0A＝＝＝ ＝＝＝ ＝＝＝ ＝＝＝ ＝＝＝ "
+        
+        curl -s -o /dev/null -X GET "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_KEY }}/sendMessage" \
+          -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+          -d text="$(echo "$MSG" | sed 's/ /%20/g')"
+
+    - name: Delete Old Workflows (古いワークフローの削除)
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        token: ${{ secrets.ACCESS_TOKEN }}
+        repository: ${{ github.repository }}
+        retain_days: 0
+        keep_minimum_runs: 0
+        delete_workflow_pattern: redmi_ax6000_512mb
+ 
+    - name: Delete Old Releases (古いリリースの削除)
+      if: steps.compile.outcome == 'success' && env.INPUT_RELEASE == 'true'
+      uses: dev-drprasad/delete-older-releases@master
+      with:
+        keep_latest: 2
+        delete_tags: true
+        delete_tag_pattern: "${{ env.TARGET_CHIP }}_${{ env.DEVICE_NAME }}_${{ env.TARGET_DISK }}" 
+    
