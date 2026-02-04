@@ -53,10 +53,10 @@ on:
     
 env:
   # annawrt 2410
-  PONLY2410_K66_REPO_LINK:                    ${{ secrets.PONLY2410_K66_REPO_LINK }}
-  PONLY2410_K66_REPO_TREE:                    ${{ secrets.PONLY2410_K66_REPO_TREE }}
-  PONLY2410_K66_REPO_HEAD:                    ${{ secrets.PONLY2410_K66_REPO_HEAD }}
-  PONLY2410_K66_REPO_DIFF:                    ${{ secrets.PONLY2410_K66_REPO_DIFF }}
+  REPO_PONLY2410_K66_LINK:                    ${{ secrets.REPO_PONLY2410_K66_LINK }}
+  REPO_PONLY2410_K66_TREE:                    ${{ secrets.REPO_PONLY2410_K66_TREE }}
+  REPO_PONLY2410_K66_HEAD:                    ${{ secrets.REPO_PONLY2410_K66_HEAD }}
+  REPO_PONLY2410_K66_DIFF:                    ${{ secrets.REPO_PONLY2410_K66_DIFF }}
   # cmcc-xr30-emmc
   REDMI_AX6000_512MB_PONLY2410_K66_PATCHES:   ${{ secrets.REDMI_AX6000_512MB_PONLY2410_K66_PATCHES }}
   REDMI_AX6000_512MB_PONLY2410_K66_PROFILE:   ${{ secrets.REDMI_AX6000_512MB_PONLY2410_K66_PROFILE }}
@@ -69,9 +69,9 @@ env:
   ACCESS_SHA512SUM:                           ${{ secrets.ACCESS_SHA512SUM }}
   ACCESS_REPACKAGE:                           ${{ secrets.ACCESS_REPACKAGE }}
   # luci & packages repo
-  PLUGIN_REPO_SLUG:                           ${{ secrets.PLUGIN_REPO_SLUG }}
-  PLUGIN_REPO_HEAD:                           ${{ secrets.PLUGIN_REPO_HEAD }}
-  PLUGIN_REPO_FLOW:                           ${{ secrets.PLUGIN_REPO_FLOW }}
+  REPO_PLUGIN_SLUG:                           ${{ secrets.REPO_PLUGIN_SLUG }}
+  REPO_PLUGIN_HEAD:                           ${{ secrets.REPO_PLUGIN_HEAD }}
+  REPO_PLUGIN_FLOW:                           ${{ secrets.REPO_PLUGIN_FLOW }}
   # cmcc color sytle for argon
   ARGON_THEME_XIAOMI:                         ${{ secrets.ARGON_THEME_XIAOMI }}
   # telegram bot
@@ -108,18 +108,18 @@ jobs:
 
     - name: Sync and Wait for Plugin Repo (プラグインリポジトリの同期と待機)
       run: |
-        LAST_TS=$(date -d $(gh run list -w "$PLUGIN_REPO_FLOW" -R "$PLUGIN_REPO_SLUG" -s success --limit 1 --json updatedAt -q '.[0].updatedAt // "1970-01-01"') +%s)
+        LAST_TS=$(date -d $(gh run list -w "$REPO_PLUGIN_FLOW" -R "$REPO_PLUGIN_SLUG" -s success --limit 1 --json updatedAt -q '.[0].updatedAt // "1970-01-01"') +%s)
         DIFF=$(( ($(date +%s) - LAST_TS) / 3600 ))
         if [ "$DIFF" -ge 24 ]; then
           echo "⚠️ 最終同期から ${DIFF}時間経過。同期を開始します..."
-          gh workflow run "$PLUGIN_REPO_FLOW" -R "$PLUGIN_REPO_SLUG" -r "$PLUGIN_REPO_HEAD"
+          gh workflow run "$REPO_PLUGIN_FLOW" -R "$REPO_PLUGIN_SLUG" -r "$REPO_PLUGIN_HEAD"
           for i in {1..30}; do
             sleep 20
-            RUN_ID=$(gh run list -w "$PLUGIN_REPO_FLOW" -R "$PLUGIN_REPO_SLUG" --limit 1 --json databaseId,status -q 'map(select(.status != "completed")) | .[0].databaseId')
+            RUN_ID=$(gh run list -w "$REPO_PLUGIN_FLOW" -R "$REPO_PLUGIN_SLUG" --limit 1 --json databaseId,status -q 'map(select(.status != "completed")) | .[0].databaseId')
             [[ -n "$RUN_ID" && "$RUN_ID" != "null" ]] && break
           done
           [[ -z "$RUN_ID" ]] && echo "❌ タイムアウトを検出しました" && exit 1
-          gh run watch "$RUN_ID" -R "$PLUGIN_REPO_SLUG" --exit-status
+          gh run watch "$RUN_ID" -R "$REPO_PLUGIN_SLUG" --exit-status
         else
           echo "✅ 最近同期されました（${DIFF}時間前）。スキップします。"
         fi
@@ -160,7 +160,7 @@ jobs:
       working-directory: ./
       run: |
         df -hT $PWD
-        git clone --depth 1 $PONLY2410_K66_REPO_LINK -b $PONLY2410_K66_REPO_HEAD openwrt
+        git clone --depth 1 $REPO_PONLY2410_K66_LINK -b $REPO_PONLY2410_K66_HEAD openwrt
         # Remove China Mirrors (中国国内ミラーの削除)
         [ -f "openwrt/scripts/projectsmirrors.json" ] && sed -i '/.cn\//d; /tencent/d; /aliyun/d' openwrt/scripts/projectsmirrors.json && rm -rf files
         # Prepare Cache Key (キャッシュキーの准备)
@@ -174,16 +174,16 @@ jobs:
         ccache: true
         toolchain: true
         skip: true
-        mixkey: ${{ env.TARGET_CHIP }}-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.PONLY2410_K66_REPO_TREE }}-${{ secrets.PONLY2410_K66_REPO_HEAD }}-${{ env.KERNEL_VERS }}-[${{ env.CLEAN_MARK }}]
+        mixkey: ${{ env.TARGET_CHIP }}-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.REPO_PONLY2410_K66_TREE }}-${{ secrets.REPO_PONLY2410_K66_HEAD }}-${{ env.KERNEL_VERS }}-[${{ env.CLEAN_MARK }}]
         prefix: ${{ github.workspace }}/openwrt
 
     - name: Cache dl Directory (dlディレクトリのキャッシュ)
       uses: actions/cache@v3
       with:
         path: openwrt/dl
-        key: mt798x-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.PONLY2410_K66_REPO_TREE }}-${{ secrets.PONLY2410_K66_REPO_HEAD }}-${{ env.KERNEL_VERS }}-${{ hashFiles('**/feeds.conf.default') }}
+        key: mt798x-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.REPO_PONLY2410_K66_TREE }}-${{ secrets.REPO_PONLY2410_K66_HEAD }}-${{ env.KERNEL_VERS }}-${{ hashFiles('**/feeds.conf.default') }}
         restore-keys: |
-          mt798x-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.PONLY2410_K66_REPO_TREE }}-${{ secrets.PONLY2410_K66_REPO_HEAD }}-${{ env.KERNEL_VERS }}-
+          mt798x-${{ env.CACHE_MONTH }}-${{ env.SOURCE_CODE }}-${{ secrets.REPO_PONLY2410_K66_TREE }}-${{ secrets.REPO_PONLY2410_K66_HEAD }}-${{ env.KERNEL_VERS }}-
 
     - name: Update & Install Feeds (フィードの更新とインストール)
       working-directory: ./openwrt
@@ -211,7 +211,7 @@ jobs:
         cat <<'EOF' > .config
         ${{ secrets.REDMI_AX6000_512MB_PONLY2410_K66_PROFILE }}
         EOF
-        ${{ secrets.PONLY2410_K66_REPO_DIFF }}
+        ${{ secrets.REPO_PONLY2410_K66_DIFF }}
         ${{ secrets.ARGON_THEME_XIAOMI }}
         sed -i 's/download-ci-llvm=true/download-ci-llvm=false/g' feeds/packages/lang/rust/Makefile
         cat feeds/packages/lang/rust/Makefile
@@ -293,8 +293,8 @@ jobs:
           - 💿 容量仕様: 　${{ env.TARGET_DISK }}
           - 🐧 カーネル: 　${{ env.KERNEL_VERS }}
           - 👤 ソース名: 　${{ env.SOURCE_CODE }}
-          - 🌲 ソース元: 　${{ env.PONLY2410_K66_REPO_TREE }}
-          - 🌿 ブランチ: 　${{ env.PONLY2410_K66_REPO_HEAD }}
+          - 🌲 ソース元: 　${{ env.REPO_PONLY2410_K66_TREE }}
+          - 🌿 ブランチ: 　${{ env.REPO_PONLY2410_K66_HEAD }}
           - 🔗 管理ＩＰ: 　192.168.***.1 または ${{ env.SOURCE_CODE }}.lan
           - 🛡️ 初期パス: 　********
           ### ⚠️ 免責事項 ⚠️
@@ -352,8 +352,8 @@ jobs:
         MSG="${MSG}%0A•💿%20容量仕様:%0A　%20　%20　${TARGET_DISK}"
         MSG="${MSG}%0A•🐧%20カーネル:%0A　%20　%20　${KERNEL_VERS}"
         MSG="${MSG}%0A•👤%20ソース名:%0A　%20　%20　${SOURCE_CODE}"
-        MSG="${MSG}%0A•🌲%20ソース元:%0A　%20　%20　${PONLY2410_K66_REPO_TREE}"
-        MSG="${MSG}%0A•🌿%20ブランチ:%0A　%20　%20　${PONLY2410_K66_REPO_HEAD}%0A"
+        MSG="${MSG}%0A•🌲%20ソース元:%0A　%20　%20　${REPO_PONLY2410_K66_TREE}"
+        MSG="${MSG}%0A•🌿%20ブランチ:%0A　%20　%20　${REPO_PONLY2410_K66_HEAD}%0A"
 
         MSG="${MSG}%0A＝＝＝＝＝ 状 態 一 覧 ＝＝＝＝＝＝%0A${STAT_LIST}%0A%0A"
         MSG="${MSG}＝＝＝＝＝ 結 果 情 報 ＝＝＝＝＝＝%0A"
