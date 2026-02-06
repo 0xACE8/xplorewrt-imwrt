@@ -128,21 +128,47 @@ jobs:
       uses: actions/checkout@main
       with:
         fetch-depth: 0
-
+        
     - name: Check Server Performance (サーバー性能の確認)
+      id: check_env
       run: |
+        CPU_MODEL=$(cat /proc/cpuinfo | grep -m1 "model name" | awk -F: '{print $2}' | sed 's/^[ \t]*//')
+        FREE_SPACE=$(df --block-size=1G / | awk 'NR==2 {print $4}')
         echo "⚠️注意⚠️"
         echo "サーバーのリソースは有限です。プラグインの過剰な選択はCPU高負荷の原因となります。"
-        echo -e "既知のCPUモデル（降順）: 7763，8370C，8272CL，8171M，E5-2673\n"
+        echo -e "既知のCPUモデル（降顺）: 7763，8370C，8272CL，8171M，E5-2673\n"
         echo "-------------------------CPU 情報---------------------------"
         echo "CPUの物理数  : $(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
         echo "CPUコア数    : $(nproc)"
-        echo -e "CPUモデル情報:$(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\n"
+        echo -e "CPUモデル情報: $CPU_MODEL\n"
         echo "------------------------メモリ情報--------------------------"
         echo "メモリの詳細:"
-        echo -e "$(sudo lshw -short -C memory | grep GiB)\n"
+        free -h
+        echo ""
         echo "---------------------ハードディスク情報---------------------"
-        echo "ディスク容量: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+        # 兼容更多磁盘命名方式
+        echo "ディスクデバイス数: $(lsblk -dn -o NAME | grep -E '^sd|^vd|^nvme' | wc -l)"
+        df -hT
+        echo "------------------サーバー最適化の実行結果------------------"
+        if [[ "$CPU_MODEL" != *"EPYC 7763"* ]]; then
+          echo "❌ ハードウェア不適合、ジョブを停止します。"
+          exit 1
+        fi
+        echo "✅ ハードウェアチェック完了、実行を継続。"
+        if [ "$FREE_SPACE" -lt 50 ]; then
+          echo "⚠️ ストレージ不足、拡張プロセスを開始。"
+          echo "needs_maximize=true" >> $GITHUB_OUTPUT
+        else
+          echo "✅ ストレージ容量正常、実行を継続。"
+          echo "needs_maximize=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Free Disk Space (ディスク空き容量の確保)
+      if: steps.check_env.outputs.needs_maximize == 'true'
+      uses: easimon/maximize-build-space@master
+      with: 
+        root-reserve-mb: 8192
+        swap-size-mb: 1
 
     - name: Initialize Environment (環境の初期化)
       env:
